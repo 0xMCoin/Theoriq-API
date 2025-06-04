@@ -1,0 +1,416 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Theoriq API Server - Demo</title>
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Oxygen, Ubuntu, Cantarell, sans-serif;
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            min-height: 100vh;
+            padding: 20px;
+        }
+
+        .container {
+            max-width: 1200px;
+            margin: 0 auto;
+        }
+
+        .header {
+            text-align: center;
+            color: white;
+            margin-bottom: 30px;
+        }
+
+        .header h1 {
+            font-size: 2.5em;
+            margin-bottom: 10px;
+        }
+
+        .header p {
+            font-size: 1.2em;
+            opacity: 0.9;
+        }
+
+        .controls {
+            background: rgba(255, 255, 255, 0.1);
+            border-radius: 15px;
+            padding: 20px;
+            margin-bottom: 30px;
+            backdrop-filter: blur(10px);
+        }
+
+        .controls h3 {
+            color: white;
+            margin-bottom: 15px;
+        }
+
+        .button-group {
+            display: flex;
+            gap: 10px;
+            flex-wrap: wrap;
+            margin-bottom: 15px;
+        }
+
+        .btn {
+            padding: 10px 20px;
+            border: none;
+            border-radius: 8px;
+            background: rgba(255, 255, 255, 0.2);
+            color: white;
+            cursor: pointer;
+            transition: all 0.3s ease;
+            font-weight: 500;
+        }
+
+        .btn:hover {
+            background: rgba(255, 255, 255, 0.3);
+            transform: translateY(-2px);
+        }
+
+        .btn.active {
+            background: #4CAF50;
+        }
+
+        .endpoint-demo {
+            background: rgba(255, 255, 255, 0.95);
+            border-radius: 15px;
+            padding: 25px;
+            margin-bottom: 20px;
+            box-shadow: 0 8px 32px rgba(0, 0, 0, 0.1);
+        }
+
+        .endpoint-title {
+            font-size: 1.3em;
+            font-weight: 600;
+            margin-bottom: 15px;
+            color: #333;
+        }
+
+        .endpoint-url {
+            background: #f8f9fa;
+            padding: 10px;
+            border-radius: 6px;
+            font-family: 'Courier New', monospace;
+            margin-bottom: 15px;
+            border: 1px solid #e9ecef;
+        }
+
+        .result {
+            background: #f8f9fa;
+            border: 1px solid #e9ecef;
+            border-radius: 6px;
+            padding: 15px;
+            min-height: 100px;
+            overflow-x: auto;
+        }
+
+        .loading {
+            text-align: center;
+            color: #6c757d;
+            font-style: italic;
+        }
+
+        .error {
+            color: #dc3545;
+            background: #f8d7da;
+            border-color: #f5c6cb;
+        }
+
+        .success {
+            color: #155724;
+            background: #d4edda;
+            border-color: #c3e6cb;
+        }
+
+        .metrics-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+            gap: 15px;
+            margin-bottom: 20px;
+        }
+
+        .metric-card {
+            background: white;
+            padding: 20px;
+            border-radius: 10px;
+            text-align: center;
+            box-shadow: 0 2px 10px rgba(0, 0, 0, 0.1);
+        }
+
+        .metric-value {
+            font-size: 2em;
+            font-weight: bold;
+            color: #667eea;
+        }
+
+        .metric-label {
+            color: #6c757d;
+            margin-top: 5px;
+        }
+
+        .yappers-table {
+            background: white;
+            border-radius: 10px;
+            overflow: hidden;
+            margin-top: 20px;
+        }
+
+        .yappers-table table {
+            width: 100%;
+            border-collapse: collapse;
+        }
+
+        .yappers-table th,
+        .yappers-table td {
+            padding: 12px;
+            text-align: left;
+            border-bottom: 1px solid #e9ecef;
+        }
+
+        .yappers-table th {
+            background: #f8f9fa;
+            font-weight: 600;
+        }
+
+        .yappers-table tr:hover {
+            background: #f8f9fa;
+        }
+
+        .rank {
+            font-weight: bold;
+            color: #667eea;
+        }
+
+        .username {
+            color: #1DA1F2;
+            text-decoration: none;
+        }
+
+        .username:hover {
+            text-decoration: underline;
+        }
+
+        pre {
+            background: #2d3748;
+            color: #e2e8f0;
+            padding: 15px;
+            border-radius: 6px;
+            overflow-x: auto;
+            font-size: 0.9em;
+            line-height: 1.5;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <div class="header">
+            <h1>🚀 Theoriq API Server</h1>
+            <p>Demonstração dos endpoints da API</p>
+        </div>
+
+        <div class="controls">
+            <h3>Controles</h3>
+            <div class="button-group">
+                <button class="btn active" onclick="setWindow('7d')" id="btn-7d">7 dias</button>
+                <button class="btn" onclick="setWindow('30d')" id="btn-30d">30 dias</button>
+                <button class="btn" onclick="setWindow('90d')" id="btn-90d">90 dias</button>
+            </div>
+            <div class="button-group">
+                <button class="btn" onclick="testEndpoint('health')">Health Check</button>
+                <button class="btn" onclick="testEndpoint('dashboard')">Dashboard</button>
+                <button class="btn" onclick="testEndpoint('metrics')">Métricas</button>
+                <button class="btn" onclick="testEndpoint('yappers')">Yappers</button>
+            </div>
+        </div>
+
+        <!-- Dashboard -->
+        <div class="endpoint-demo">
+            <div class="endpoint-title">📊 Dashboard Completo</div>
+            <div class="endpoint-url" id="dashboard-url">GET /api/dashboard/7d</div>
+            <div id="dashboard-metrics" class="metrics-grid"></div>
+            <div id="dashboard-yappers" class="yappers-table"></div>
+        </div>
+
+        <!-- Métricas -->
+        <div class="endpoint-demo">
+            <div class="endpoint-title">📈 Métricas</div>
+            <div class="endpoint-url" id="metrics-url">GET /api/metrics/7d</div>
+            <div class="result" id="metrics-result">
+                <div class="loading">Clique em "Métricas" para carregar...</div>
+            </div>
+        </div>
+
+        <!-- Yappers -->
+        <div class="endpoint-demo">
+            <div class="endpoint-title">👥 Top Yappers</div>
+            <div class="endpoint-url" id="yappers-url">GET /api/yappers/7d?limit=10</div>
+            <div class="result" id="yappers-result">
+                <div class="loading">Clique em "Yappers" para carregar...</div>
+            </div>
+        </div>
+
+        <!-- Health -->
+        <div class="endpoint-demo">
+            <div class="endpoint-title">💚 Health Check</div>
+            <div class="endpoint-url">GET /api/health</div>
+            <div class="result" id="health-result">
+                <div class="loading">Clique em "Health Check" para verificar...</div>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        let currentWindow = '7d';
+
+        function setWindow(window) {
+            currentWindow = window;
+            
+            // Update active button
+            document.querySelectorAll('.btn').forEach(btn => btn.classList.remove('active'));
+            document.getElementById(`btn-${window}`).classList.add('active');
+            
+            // Update URLs
+            document.getElementById('dashboard-url').textContent = `GET /api/dashboard/${window}`;
+            document.getElementById('metrics-url').textContent = `GET /api/metrics/${window}`;
+            document.getElementById('yappers-url').textContent = `GET /api/yappers/${window}?limit=10`;
+            
+            // Auto-load dashboard
+            testEndpoint('dashboard');
+        }
+
+        async function testEndpoint(endpoint) {
+            let url, resultElement;
+            
+            switch(endpoint) {
+                case 'health':
+                    url = '/api/health';
+                    resultElement = document.getElementById('health-result');
+                    break;
+                case 'dashboard':
+                    url = `/api/dashboard/${currentWindow}`;
+                    resultElement = null; // Special handling
+                    break;
+                case 'metrics':
+                    url = `/api/metrics/${currentWindow}`;
+                    resultElement = document.getElementById('metrics-result');
+                    break;
+                case 'yappers':
+                    url = `/api/yappers/${currentWindow}?limit=10`;
+                    resultElement = document.getElementById('yappers-result');
+                    break;
+            }
+
+            if (resultElement) {
+                resultElement.innerHTML = '<div class="loading">Carregando...</div>';
+                resultElement.className = 'result';
+            }
+
+            try {
+                const response = await fetch(url);
+                const data = await response.json();
+
+                if (endpoint === 'dashboard') {
+                    displayDashboard(data);
+                } else {
+                    displayResult(resultElement, data, response.ok);
+                }
+            } catch (error) {
+                const errorData = { success: false, error: error.message };
+                if (endpoint === 'dashboard') {
+                    displayDashboard(errorData);
+                } else {
+                    displayResult(resultElement, errorData, false);
+                }
+            }
+        }
+
+        function displayResult(element, data, success) {
+            element.className = `result ${success ? 'success' : 'error'}`;
+            element.innerHTML = `<pre>${JSON.stringify(data, null, 2)}</pre>`;
+        }
+
+        function displayDashboard(data) {
+            const metricsContainer = document.getElementById('dashboard-metrics');
+            const yappersContainer = document.getElementById('dashboard-yappers');
+
+            if (!data.success) {
+                metricsContainer.innerHTML = '<div class="error">Erro ao carregar métricas</div>';
+                yappersContainer.innerHTML = '<div class="error">Erro ao carregar yappers</div>';
+                return;
+            }
+
+            // Display metrics
+            const metrics = data.metrics;
+            metricsContainer.innerHTML = `
+                <div class="metric-card">
+                    <div class="metric-value">${metrics.formattedMetrics.totalYappers}</div>
+                    <div class="metric-label">Total Yappers</div>
+                </div>
+                <div class="metric-card">
+                    <div class="metric-value">${metrics.formattedMetrics.totalTweets}</div>
+                    <div class="metric-label">Total Tweets</div>
+                </div>
+                <div class="metric-card">
+                    <div class="metric-value">${metrics.formattedMetrics.topImpressions}</div>
+                    <div class="metric-label">Top Impressions</div>
+                </div>
+                <div class="metric-card">
+                    <div class="metric-value">${metrics.formattedMetrics.topLikes}</div>
+                    <div class="metric-label">Top Likes</div>
+                </div>
+            `;
+
+            // Display yappers table
+            const yappers = data.yappers.slice(0, 10);
+            yappersContainer.innerHTML = `
+                <table>
+                    <thead>
+                        <tr>
+                            <th>Rank</th>
+                            <th>Username</th>
+                            <th>Mindshare</th>
+                            <th>Tweets</th>
+                            <th>Impressions</th>
+                            <th>Likes</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        ${yappers.map(yapper => `
+                            <tr>
+                                <td class="rank">#${yapper.rank}</td>
+                                <td><a href="${yapper.twitterUrl}" target="_blank" class="username">@${yapper.username}</a></td>
+                                <td>${(yapper.mindshare * 100).toFixed(2)}%</td>
+                                <td>${yapper.tweets}</td>
+                                <td>${formatNumber(yapper.impressions)}</td>
+                                <td>${formatNumber(yapper.likes)}</td>
+                            </tr>
+                        `).join('')}
+                    </tbody>
+                </table>
+            `;
+        }
+
+        function formatNumber(num) {
+            if (num >= 1000000) {
+                return (num / 1000000).toFixed(1) + 'M';
+            } else if (num >= 1000) {
+                return (num / 1000).toFixed(1) + 'K';
+            }
+            return num.toString();
+        }
+
+        // Auto-load dashboard on page load
+        window.onload = () => {
+            testEndpoint('dashboard');
+        };
+    </script>
+</body>
+</html> 

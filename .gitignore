@@ -1,0 +1,3 @@
+tests/*
+node_modules
+database/theoriq_staging.db
