@@ -11,6 +11,17 @@ const SchedulerService = require('./services/scheduler');
 const app = express();
 const PORT = process.env.PORT || 3000;
 
+// Global error handlers to prevent crashes
+process.on('uncaughtException', (error) => {
+    console.error('🚨 Uncaught Exception:', error);
+    console.log('🔄 Server continuing to run...');
+});
+
+process.on('unhandledRejection', (reason, promise) => {
+    console.error('🚨 Unhandled Rejection at:', promise, 'reason:', reason);
+    console.log('🔄 Server continuing to run...');
+});
+
 // Middleware
 app.use(cors());
 app.use(express.json());
