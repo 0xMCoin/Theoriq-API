@@ -3,6 +3,10 @@ const cors = require('cors');
 const fetch = require('node-fetch');
 const path = require('path');
 const moment = require('moment');
+const rateLimit = require('express-rate-limit');
+const NodeCache = require('node-cache');
+const helmet = require('helmet');
+const compression = require('compression');
 
 // Import new services
 const TheoriqDatabase = require('./database/database');
@@ -10,6 +14,9 @@ const SchedulerService = require('./services/scheduler');
 
 const app = express();
 const PORT = process.env.PORT || 3000;
+
+// Criar cache com TTL de 5 minutos por padrão
+const apiCache = new NodeCache({ stdTTL: 300 });
 
 // Global error handlers to prevent crashes
 process.on('uncaughtException', (error) => {
@@ -27,6 +34,94 @@ app.use(cors());
 app.use(express.json());
 app.use(express.static('public'));
 
+// Middlewares para segurança e performance
+app.use(helmet()); // Proteção de segurança básica
+app.use(compression()); // Compressão de resposta para melhorar performance
+
+// Rate limiting para prevenir abuso da API
+const apiLimiter = rateLimit({
+  windowMs: 15 * 60 * 1000, // 15 minutos
+  max: 100, // Limite de 100 requisições por IP
+  standardHeaders: true,
+  message: {
+    success: false,
+    error: 'Muitas requisições deste IP, tente novamente após 15 minutos',
+    timestamp: new Date().toISOString()
+  }
+});
+
+// Aplicar rate limiting em todas as rotas da API
+app.use('/api/', apiLimiter);
+
+// Middleware para validação de parâmetros
+const validateParams = (req, res, next) => {
+  // Validar window
+  if (req.params.window && !['7d', '30d', '90d'].includes(req.params.window)) {
+    return res.status(400).json({
+      success: false,
+      error: 'Período inválido',
+      validValues: ['7d', '30d', '90d'],
+      timestamp: new Date().toISOString()
+    });
+  }
+  
+  // Validar e normalizar limit
+  if (req.query.limit) {
+    const limit = parseInt(req.query.limit);
+    if (isNaN(limit) || limit <= 0) {
+      return res.status(400).json({
+        success: false,
+        error: 'Valor de limite inválido, deve ser um número positivo',
+        timestamp: new Date().toISOString()
+      });
+    }
+    
+    // Limitar valor máximo (para proteger contra abuso)
+    req.query.limit = Math.min(limit, 250);
+  }
+  
+  // Validar offset para paginação
+  if (req.query.offset) {
+    const offset = parseInt(req.query.offset);
+    if (isNaN(offset) || offset < 0) {
+      return res.status(400).json({
+        success: false,
+        error: 'Valor de offset inválido, deve ser um número não-negativo',
+        timestamp: new Date().toISOString()
+      });
+    }
+    req.query.offset = offset;
+  } else {
+    req.query.offset = 0; // Default offset
+  }
+  
+  next();
+};
+
+// Middleware de cache para APIs
+const cacheMiddleware = (duration) => {
+  return (req, res, next) => {
+    const key = req.originalUrl;
+    const cachedResponse = apiCache.get(key);
+    
+    if (cachedResponse) {
+      return res.json(cachedResponse);
+    }
+    
+    // Armazenar a resposta original para interceptá-la
+    const originalSend = res.json;
+    res.json = function(body) {
+      // Armazenar no cache apenas respostas de sucesso
+      if (body && body.success) {
+        apiCache.set(key, body, duration);
+      }
+      originalSend.call(this, body);
+    };
+    
+    next();
+  };
+};
+
 // API Configuration
 const API_CONFIG = {
     // PROXY URLs - Try multiple endpoints for better reliability
@@ -43,9 +138,19 @@ const API_CONFIG = {
 class TheoriqAPI {
     constructor() {
         this.currentProxyIndex = 0;
+        this.cache = {};
+        this.cacheTTL = 5 * 60 * 1000; // 5 minutos em milissegundos
     }
     
     async getData(window = '7d') {
+        // Verificar cache interno
+        const cacheKey = `data_${window}`;
+        const cachedData = this.checkCache(cacheKey);
+        if (cachedData) {
+            console.log(`Using cached data for window ${window}`);
+            return cachedData;
+        }
+        
         // Try direct API first
         try {
             const directUrl = `${API_CONFIG.directUrl}?ticker=${API_CONFIG.ticker}&window=${window}`;
@@ -53,13 +158,16 @@ class TheoriqAPI {
                 method: 'GET',
                 headers: {
                     'Accept': 'application/json'
-                }
+                },
+                timeout: 5000 // Timeout de 5 segundos
             });
             
             if (response.ok) {
                 const data = await response.json();
                 console.log('Direct API success');
-                return { data, isLive: true };
+                const result = { data, isLive: true };
+                this.setCache(cacheKey, result);
+                return result;
             }
         } catch (error) {
             console.log('Direct API failed, trying proxies...');
@@ -80,7 +188,9 @@ class TheoriqAPI {
                     finalUrl = proxyUrl + encodeURIComponent(targetUrl);
                 }
                 
-                const response = await fetch(finalUrl);
+                const response = await fetch(finalUrl, {
+                    timeout: 5000 // Timeout de 5 segundos
+                });
                 
                 if (response.ok) {
                     let data = await response.json();
@@ -91,7 +201,9 @@ class TheoriqAPI {
                     }
                     
                     console.log(`Proxy ${i + 1} success`);
-                    return { data, isLive: true };
+                    const result = { data, isLive: true };
+                    this.setCache(cacheKey, result);
+                    return result;
                 }
             } catch (error) {
                 console.log(`Proxy ${i + 1} failed:`, error);
@@ -100,6 +212,25 @@ class TheoriqAPI {
         
         // All methods failed - throw error
         throw new Error('All API endpoints failed');
+    }
+    
+    checkCache(key) {
+        const cachedItem = this.cache[key];
+        if (cachedItem && (Date.now() - cachedItem.timestamp) < this.cacheTTL) {
+            return cachedItem.data;
+        }
+        return null;
+    }
+    
+    setCache(key, data) {
+        this.cache[key] = {
+            data,
+            timestamp: Date.now()
+        };
+    }
+    
+    clearCache() {
+        this.cache = {};
     }
     
     extractMetrics(apiResponse) {
@@ -112,9 +243,9 @@ class TheoriqAPI {
         };
     }
     
-    extractYappers(apiResponse, limit = 250) {
+    extractYappers(apiResponse, limit = 250, offset = 0) {
         const yappers = apiResponse.community_mindshare.top_250_yappers || [];
-        return yappers.slice(0, limit).map(yapper => ({
+        return yappers.slice(offset, offset + limit).map(yapper => ({
             rank: parseInt(yapper.rank),
             username: yapper.username,
             mindshare: parseFloat(yapper.mindshare),
@@ -144,7 +275,7 @@ function formatNumber(num) {
 // ============= ORIGINAL API ROUTES =============
 
 // Get raw API data
-app.get('/api/data/:window?', async (req, res) => {
+app.get('/api/data/:window?', validateParams, cacheMiddleware(300), async (req, res) => {
     try {
         const window = req.params.window || '7d';
         const result = await api.getData(window);
@@ -165,7 +296,7 @@ app.get('/api/data/:window?', async (req, res) => {
 });
 
 // Get processed metrics
-app.get('/api/metrics/:window?', async (req, res) => {
+app.get('/api/metrics/:window?', validateParams, cacheMiddleware(300), async (req, res) => {
     try {
         const window = req.params.window || '7d';
         const result = await api.getData(window);
@@ -196,19 +327,26 @@ app.get('/api/metrics/:window?', async (req, res) => {
 });
 
 // Get yappers leaderboard
-app.get('/api/yappers/:window?', async (req, res) => {
+app.get('/api/yappers/:window?', validateParams, cacheMiddleware(300), async (req, res) => {
     try {
         const window = req.params.window || '7d';
-        const limit = parseInt(req.query.limit) || 250;
+        const limit = parseInt(req.query.limit) || 50;
+        const offset = parseInt(req.query.offset) || 0;
         
         const result = await api.getData(window);
-        const yappers = api.extractYappers(result.data, limit);
+        const allYappers = result.data.community_mindshare.top_250_yappers || [];
+        const yappers = api.extractYappers(result.data, limit, offset);
         
         res.json({
             success: true,
             isLive: result.isLive,
             yappers: yappers,
-            count: yappers.length,
+            pagination: {
+                total: allYappers.length,
+                limit,
+                offset,
+                hasMore: offset + limit < allYappers.length
+            },
             timestamp: new Date().toISOString()
         });
     } catch (error) {
@@ -222,14 +360,16 @@ app.get('/api/yappers/:window?', async (req, res) => {
 });
 
 // Get complete dashboard data
-app.get('/api/dashboard/:window?', async (req, res) => {
+app.get('/api/dashboard/:window?', validateParams, cacheMiddleware(300), async (req, res) => {
     try {
         const window = req.params.window || '7d';
-        const limit = parseInt(req.query.limit) || 250;
+        const limit = parseInt(req.query.limit) || 50;
+        const offset = parseInt(req.query.offset) || 0;
         
         const result = await api.getData(window);
         const metrics = api.extractMetrics(result.data);
-        const yappers = api.extractYappers(result.data, limit);
+        const allYappers = result.data.community_mindshare.top_250_yappers || [];
+        const yappers = api.extractYappers(result.data, limit, offset);
         
         res.json({
             success: true,
@@ -245,6 +385,12 @@ app.get('/api/dashboard/:window?', async (req, res) => {
                 }
             },
             yappers: yappers,
+            pagination: {
+                total: allYappers.length,
+                limit,
+                offset,
+                hasMore: offset + limit < allYappers.length
+            },
             timestamp: new Date().toISOString()
         });
     } catch (error) {
@@ -260,10 +406,11 @@ app.get('/api/dashboard/:window?', async (req, res) => {
 // ============= DATABASE & HISTORICAL ROUTES =============
 
 // Get latest snapshot from database (for "Last 7 Days Swarms")
-app.get('/api/latest', async (req, res) => {
+app.get('/api/latest', validateParams, cacheMiddleware(600), async (req, res) => {
     try {
         const window = req.query.window || '7d';
         const limit = parseInt(req.query.limit) || 50;
+        const offset = parseInt(req.query.offset) || 0;
         
         const snapshot = await db.getLatestSnapshot(window);
         
@@ -276,7 +423,9 @@ app.get('/api/latest', async (req, res) => {
             });
         }
 
-        const yappers = await db.getYappersForSnapshot(snapshot.snapshot_id, limit);
+        // Obter contagem total de yappers no snapshot
+        const totalYappers = await db.getYapperCountForSnapshot(snapshot.snapshot_id);
+        const yappers = await db.getYappersForSnapshot(snapshot.snapshot_id, limit, offset);
         
         res.json({
             success: true,
@@ -306,6 +455,12 @@ app.get('/api/latest', async (req, res) => {
                     twitterUrl: y.twitter_url
                 }))
             },
+            pagination: {
+                total: totalYappers,
+                limit,
+                offset,
+                hasMore: offset + limit < totalYappers
+            },
             timestamp: new Date().toISOString()
         });
     } catch (error) {
@@ -319,29 +474,24 @@ app.get('/api/latest', async (req, res) => {
 });
 
 // Get historical snapshots
-app.get('/api/history', async (req, res) => {
+app.get('/api/history', validateParams, cacheMiddleware(600), async (req, res) => {
     try {
         const window = req.query.window || '7d';
         const limit = parseInt(req.query.limit) || 10;
+        const offset = parseInt(req.query.offset) || 0;
         
-        const snapshots = await db.getHistoricalSnapshots(window, limit);
+        const totalCount = await db.getSnapshotCount(window);
+        const result = await db.getHistoricalSnapshots(window, limit, offset);
         
         res.json({
             success: true,
-            snapshots: snapshots.map(s => ({
-                id: s.snapshot_id,
-                collectionDate: s.collection_date,
-                windowPeriod: s.window_period,
-                isLive: !!s.is_live,
-                metrics: {
-                    totalYappers: s.total_yappers,
-                    totalTweets: s.total_tweets,
-                    topImpressions: s.top_impressions,
-                    topLikes: s.top_likes
-                },
-                createdAt: s.created_at
-            })),
-            count: snapshots.length,
+            snapshots: result.snapshots || [],
+            pagination: {
+                total: totalCount,
+                limit,
+                offset,
+                hasMore: offset + limit < totalCount
+            },
             timestamp: new Date().toISOString()
         });
     } catch (error) {
@@ -355,12 +505,13 @@ app.get('/api/history', async (req, res) => {
 });
 
 // Get specific snapshot with yappers
-app.get('/api/snapshot/:snapshotId', async (req, res) => {
+app.get('/api/snapshot/:snapshotId', validateParams, cacheMiddleware(600), async (req, res) => {
     try {
         const snapshotId = req.params.snapshotId;
-        const limit = parseInt(req.query.limit) || 250;
+        const limit = parseInt(req.query.limit) || 50;
+        const offset = parseInt(req.query.offset) || 0;
         
-        const snapshot = await db.getCompleteSnapshot(snapshotId);
+        const snapshot = await db.getCompleteSnapshot(snapshotId, limit, offset);
         
         if (!snapshot) {
             return res.status(404).json({
@@ -369,6 +520,9 @@ app.get('/api/snapshot/:snapshotId', async (req, res) => {
                 timestamp: new Date().toISOString()
             });
         }
+
+        // Obter contagem total de yappers no snapshot
+        const totalYappers = await db.getYapperCountForSnapshot(snapshotId);
 
         res.json({
             success: true,
@@ -383,7 +537,7 @@ app.get('/api/snapshot/:snapshotId', async (req, res) => {
                     topImpressions: snapshot.top_impressions,
                     topLikes: snapshot.top_likes
                 },
-                yappers: snapshot.yappers.slice(0, limit).map(y => ({
+                yappers: snapshot.yappers.map(y => ({
                     rank: y.rank,
                     username: y.username,
                     mindshare: y.mindshare,
@@ -393,6 +547,12 @@ app.get('/api/snapshot/:snapshotId', async (req, res) => {
                     twitterUrl: y.twitter_url
                 })),
                 createdAt: snapshot.created_at
+            },
+            pagination: {
+                total: totalYappers,
+                limit,
+                offset,
+                hasMore: offset + limit < totalYappers
             },
             timestamp: new Date().toISOString()
         });
@@ -408,10 +568,53 @@ app.get('/api/snapshot/:snapshotId', async (req, res) => {
 
 // ============= SCHEDULER & ADMIN ROUTES =============
 
+// Rate limiter mais restritivo para rotas admin
+const adminLimiter = rateLimit({
+  windowMs: 15 * 60 * 1000, // 15 minutos
+  max: 20, // Limite de 20 requisições por IP
+  standardHeaders: true,
+  message: {
+    success: false,
+    error: 'Muitas requisições admin deste IP, tente novamente após 15 minutos',
+    timestamp: new Date().toISOString()
+  }
+});
+
+// Aplicar limitador nas rotas admin
+app.use('/api/admin/', adminLimiter);
+
+// Cache control - limpar cache
+app.post('/api/admin/clear-cache', async (req, res) => {
+    try {
+        // Limpar cache do Node-Cache
+        apiCache.flushAll();
+        
+        // Limpar cache interno da API
+        api.clearCache();
+        
+        res.json({
+            success: true,
+            message: 'Cache limpo com sucesso',
+            timestamp: new Date().toISOString()
+        });
+    } catch (error) {
+        res.status(500).json({
+            success: false,
+            error: error.message,
+            timestamp: new Date().toISOString()
+        });
+    }
+});
+
 // Manual trigger for data collection
 app.post('/api/admin/collect', async (req, res) => {
     try {
         const result = await scheduler.runWeeklyCollection();
+        
+        // Limpar cache após coleta de dados
+        apiCache.flushAll();
+        api.clearCache();
+        
         res.json(result);
     } catch (error) {
         res.status(500).json({

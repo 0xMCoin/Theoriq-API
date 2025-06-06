@@ -5,7 +5,7 @@ const { v4: uuidv4 } = require('uuid');
 
 class TheoriqDatabase {
     constructor() {
-        this.dbPath = path.join(__dirname, '..', 'theoriq.db');
+        this.dbPath = path.join(__dirname, 'theoriq_staging.db');
         this.db = null;
         this.connect();
     }
