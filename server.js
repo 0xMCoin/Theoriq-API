@@ -15,6 +15,9 @@ const SchedulerService = require('./services/scheduler');
 const app = express();
 const PORT = process.env.PORT || 3000;
 
+// Trust proxy when running behind a proxy like Render
+app.set('trust proxy', 1);
+
 // Criar cache com TTL de 5 minutos por padrão
 const apiCache = new NodeCache({ stdTTL: 300 });
 
@@ -261,6 +264,18 @@ class TheoriqAPI {
 const api = new TheoriqAPI();
 const db = new TheoriqDatabase();
 const scheduler = new SchedulerService(api);
+
+// Initialize database tables
+const initDatabase = async () => {
+  try {
+    console.log('🗄️ Initializing database tables...');
+    await db.initTables();
+    console.log('✅ Database tables initialized successfully');
+  } catch (error) {
+    console.error('❌ Error initializing database tables:', error);
+    console.log('⚠️ Continuing server startup despite database error');
+  }
+};
 
 // Utility function to format numbers
 function formatNumber(num) {
@@ -962,8 +977,9 @@ scheduler.scheduleDailyCleanup();
 scheduler.startAll();
 
 // Start server
-app.listen(PORT, () => {
+app.listen(PORT, async () => {
     console.log(`🚀 Theoriq API Server v2.0 running on port ${PORT}`);
+    await initDatabase();
     console.log(`📊 Dashboard: http://localhost:${PORT}`);
     console.log(`🔗 API Endpoints:`);
     console.log(`   • GET /api/dashboard/:window - Complete dashboard data`);
